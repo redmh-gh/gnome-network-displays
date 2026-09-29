@@ -23,7 +23,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        ref: '0.97.0'
+        ref: '73ac628'
 
     - name: Install Build Dependencies
       run: |
