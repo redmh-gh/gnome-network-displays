@@ -3,35 +3,38 @@ name: Build GNOME Network Displays (DEB)
 on:
   push:
     branches: [ "master", "main" ]
-  pull_request:
-    branches: [ "master", "main" ]
   workflow_dispatch: # 允许在 GitHub 网页端手动触发构建
 
 jobs:
   build-and-package:
-    name: Build DEB on Ubuntu 22.04
+    name: Build DEB on Pure Ubuntu 22.04
     runs-on: ubuntu-22.04
+    # 核心改动：使用官方纯净 Ubuntu 22.04 容器，避开预装依赖冲突
+    container: ubuntu:22.04 
 
     steps:
+    - name: Prepare Environment
+      run: |
+        apt-get update
+        # 纯净镜像没有 git，需要手动安装以便后续拉取代码和获取版本号
+        apt-get install -y git
+
     - name: Checkout Source Code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # 获取完整历史以计算版本号
-        # 注意：GNOME master 分支的依赖更新很快。
-        # 如果编译提示 Ubuntu 22.04 的 gtk4 或 libadwaita 版本太低，
-        # 请取消注释下面这行，并指定一个老一点的稳定版本 Tag（例如 0.93.0 或 0.90.5）
-        # ref: '0.93.0'
+        fetch-depth: 0
 
     - name: Install Build Dependencies
       run: |
-        sudo apt-get update
+        apt-get update
         
-        # 安装基础构建工具
-        sudo apt-get install -y \
-          meson ninja-build pkg-config gcc g++ gettext appstream-util desktop-file-utils
+        # 安装基础构建工具 (注意：去掉了 pkg-config，改用系统默认的 pkgconf)
+        # 容器内默认是 root 用户，因此不再需要 sudo
+        apt-get install -y \
+          meson ninja-build pkgconf gcc g++ gettext appstream-util desktop-file-utils
         
-        # 根据官方 README 安装 Ubuntu 依赖
-        sudo apt-get install -y \
+        # 根据官方 README 安装 Ubuntu 依赖 (在纯净镜像中不会再有任何冲突)
+        apt-get install -y \
           libgstrtspserver-1.0-dev libgstreamer-plugins-base1.0-dev \
           libavahi-client-dev libavahi-gobject-dev libgtk-3-dev libnm-dev \
           libpulse-dev libprotobuf-c-dev libjson-glib-dev libsoup-3.0-dev \
@@ -50,16 +53,19 @@ jobs:
         # 1. 准备 DEB 打包的临时目录结构
         mkdir -p deb_dist/DEBIAN
         
-        # 2. 将编译好的文件“假装”安装到临时目录 deb_dist 中
+        # 2. 将编译好的文件安装到临时目录 deb_dist 中
         DESTDIR=$(pwd)/deb_dist ninja -C build install
         
-        # 3. 动态获取版本号 (优先从 git tag 获取，如果没有 tag 则用 commit hash)
+        # 3. 修复 Git 容器所有权警告，以便顺利获取版本号
+        git config --global --add safe.directory $(pwd)
+        
+        # 4. 动态获取版本号 (优先从 git tag 获取)
         VERSION=$(git describe --tags --always | sed 's/^v//')
         
-        # 4. 计算软件安装后的大小 (单位 KB)
+        # 5. 计算软件安装后的大小 (单位 KB)
         SIZE=$(du -sk deb_dist/usr | cut -f1)
         
-        # 5. 生成 DEBIAN/control 控制文件
+        # 6. 生成 DEBIAN/control 控制文件
         cat <<EOF > deb_dist/DEBIAN/control
         Package: gnome-network-displays
         Version: ${VERSION}-1~ubuntu22.04
@@ -75,11 +81,11 @@ jobs:
          Built automatically via GitHub Actions.
         EOF
         
-        # 6. 修正权限 (Debian 规范要求 DEBIAN 目录为 755，control 文件为 644)
+        # 7. 修正权限 (Debian 规范要求 DEBIAN 目录为 755，control 文件为 644)
         chmod 0755 deb_dist/DEBIAN
         chmod 0644 deb_dist/DEBIAN/control
         
-        # 7. 使用 dpkg-deb 打包
+        # 8. 使用 dpkg-deb 打包
         dpkg-deb --build deb_dist gnome-network-displays_${VERSION}_amd64.deb
 
     - name: Upload DEB Artifact
@@ -87,4 +93,4 @@ jobs:
       with:
         name: gnome-network-displays-ubuntu22.04-amd64
         path: "*.deb"
-        retention-days: 7 # 产物保留 7 天
+        retention-days: 7
